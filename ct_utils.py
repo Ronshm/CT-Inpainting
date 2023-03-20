@@ -17,6 +17,6 @@ def ctshow(image_arr):
     
 def ctsave(image_arr, out_path):
     plt.close()
-    plt.imshow(image_arr, cmap='gray', dpi=300)
+    plt.imshow(image_arr, cmap='gray')
     plt.savefig(out_path, dpi=300)    
 

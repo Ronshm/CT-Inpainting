@@ -9,14 +9,15 @@ from collections import Counter
 import torch
 from random import randint
 
-# TODO remove
 import torchvision
+from torch.utils.data import Dataset
+from torchvision import transforms
 
 from ct_utils import ctload
 
 EASY_MODE = False
 
-def get_relevant_scans_dir(base_dir):
+def get_relevant_scans_dir(base_dir, covid_positive=False):
     dir_names = []
     dir_names_normal = []
 
@@ -24,7 +25,7 @@ def get_relevant_scans_dir(base_dir):
         for filename in filenames:
             full_path = os.path.dirname(os.path.join(root, filename))
             dir_names.append(full_path)
-            if 'normal' in full_path:
+            if ('normal' in full_path) ^ covid_positive:
                 dir_names_normal.append(full_path)
                 
     img_per_scan_counter = Counter(dir_names_normal)
@@ -36,34 +37,38 @@ def load_random_slices(scan_dir, slices_count):
     length = len(slices_paths)
     if length < slices_count:
         raise ValueError(f"count ({slices_count}) larger than number of files in dir ({length})") 
-    ind = randint(0, length - slices_count)
-    # TODO remove this const
+
     if EASY_MODE:
         ind=10
+    else:
+        ind = randint(10, length - 10 - slices_count)
+        
     chosen_slices_paths =  slices_paths[ind:ind + slices_count]
     return np.array([ctload(os.path.join(scan_dir, slice_path)) for slice_path in chosen_slices_paths])
 
 def generate_mask(img_dims, mask_dims, num_masked_slices, padding_slices):
     mask = torch.zeros((num_masked_slices + padding_slices * 2, img_dims[0], img_dims[1]))
-    x_ind = randint(0, img_dims[0] - mask_dims[0])
-    y_ind = randint(0, img_dims[1] - mask_dims[1])
+    
     if EASY_MODE:
-        # TODO remove this default value
-        x_ind = y_ind = 20
+        x_ind = y_ind = 300
+    else:
+        x_ind = randint(img_dims[0] // 4, img_dims[0] - (img_dims[0] // 4) - mask_dims[0])
+        y_ind = randint(img_dims[1] // 4, img_dims[1] - (img_dims[1] // 4) - mask_dims[1])
+        
     mask[padding_slices: -padding_slices,x_ind:x_ind + mask_dims[0],y_ind:y_ind + mask_dims[1]] = 1
     return torch.gt(mask, torch.zeros_like(mask))
 
-from torch.utils.data import Dataset
-from torchvision import transforms
 
 class CTDataset(Dataset):
-  def __init__(self, dir_path, mask_dims=(64, 64), num_masked_slices=3, padding_slices=2, transform=transforms.ToTensor(), normal_only=True, limit_dataset=None):
-    self._scans_paths = sorted(get_relevant_scans_dir(dir_path))
+  def __init__(self, dir_path, mask_dims=(64, 64), num_masked_slices=3, padding_slices=2, transform=transforms.ToTensor(), covid_positive=False, limit_dataset=None, transforms_per_scan=10):
+    self._scans_paths = sorted(get_relevant_scans_dir(dir_path, covid_positive=covid_positive))
     self._mask_dims = mask_dims
     self._num_masked_slices = num_masked_slices
     self._padding_slices = padding_slices
     if limit_dataset:
         self._scans_paths = self._scans_paths[:limit_dataset]
+    self._scans_count = len(self._scans_paths)
+    self._dataset_size = self._scans_count * transforms_per_scan
     # self._transform = transform
     # Cuurently ignore  transform and noraml_only
 
@@ -72,21 +77,27 @@ class CTDataset(Dataset):
     Returns:
       the length of the dataset. 
     """
-    return len(self._scans_paths)
+    return self._dataset_size
 
 
   def __getitem__(self, idx):
-    raw_scan = load_random_slices(self._scans_paths[idx], self._num_masked_slices + self._padding_slices * 2)
+    raw_scan = load_random_slices(self._scans_paths[idx % self._scans_count], self._num_masked_slices + self._padding_slices * 2)
     
     if EASY_MODE:
-        # TODO remove processing
-        import cv2
         proccessed_scans = []
         for i in range(len(raw_scan)):
             resized = cv2.resize(raw_scan[i], (64, 64))
             normalized = np.where(resized < 500, 0, 1)
             proccessed_scans.append(normalized)
         raw_scan = np.array(proccessed_scans)
+
+    if False:
+        proccessed_scans = []
+        for i in range(len(raw_scan)):
+            resized = cv2.resize(raw_scan[i], (64, 64))
+            proccessed_scans.append(resized)
+        raw_scan = np.array(proccessed_scans)
+        
         
     scan = torch.Tensor(raw_scan.astype(np.int32))
     mask = generate_mask(scan.shape[1:], self._mask_dims, self._num_masked_slices, self._padding_slices)
